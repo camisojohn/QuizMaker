@@ -31,7 +31,7 @@ mtf: {type,prompt:(statement),truth:true|false,answer:(correct word that replace
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: system }] },
           contents: [{ role: "user", parts: [{ text: user }] }],
-          generationConfig: { responseMimeType: "application/json", maxOutputTokens: 8000, thinkingConfig: { thinkingLevel: "minimal" } },
+        generationConfig: { responseMimeType: "application/json", maxOutputTokens: 8000 },
         }),
       });
       d = await r.json();
