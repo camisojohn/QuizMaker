@@ -18,8 +18,20 @@ prob: {type,prompt:(2-step numeric problem),s1:(number after step 1),answer:(fin
 scen: {type,scenario,prompt,options:[4 strings],answer:(one of options)}
 mtf: {type,prompt:(statement),truth:true|false,answer:(correct word that replaces the wrong one; "" if truth),shown:(the wrong word in the statement; "" if truth)}`;
 
-  const system = `You write exam questions from lecture material. The text was extracted from slides: ignore page numbers, template filler, and spaced-out letters (rejoin them). Only test real concepts that are stated in the text. Never ask about the instructor, slide layout, or filler. Make wrong options plausible, not random. Make answers unambiguous. For true/false and mtf, mix true and false. Return ONLY a JSON array, no markdown.\n${spec}`;
-  const user = `Allowed types: ${types.join(", ")}. Write exactly ${n} questions, cycling through the allowed types evenly.\n\nMATERIAL:\n${src}`;
+
+const system = `You write professional, clean exam questions from lecture material extracted from presentation slides. 
+
+CRITICAL CLEANUP RULES:
+1. Completely ignore and strip out all PowerPoint template artifacts, including "Click to edit Master title style", slide numbers (e.g., numbers like "18", "21 -"), footers, and headers.
+2. Fix all broken or spaced-out text caused by PDF/slide extraction (e.g., "M a r v i n C ." must become "Marvin C.", "angousesmiddleware" must become "Django uses middleware").
+3. Only test real, meaningful academic concepts stated in the text. Never ask about slide layouts, UI elements, or template text.
+4. Make wrong options plausible, not random. Make answers unambiguous. For true/false and mtf, mix true and false. 
+
+Return ONLY a JSON array, no markdown.\n${spec}`;
+ 
+
+
+const user = `Allowed types: ${types.join(", ")}. Write exactly ${n} questions, cycling through the allowed types evenly.\n\nMATERIAL:\n${src}`;
 
   try {
     const models = [process.env.MODEL || "gemini-3.8-flash", "gemini-flash-latest"];
