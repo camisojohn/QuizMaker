@@ -1,7 +1,7 @@
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
-  const key = process.env.ANTHROPIC_API_KEY;
-  if (!key) return res.status(500).json({ error: "ANTHROPIC_API_KEY not set in Vercel" });
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) return res.status(500).json({ error: "GEMINI_API_KEY not set in Vercel" });
   const { text = "", types = [], count = 10 } = req.body || {};
   const n = Math.max(5, Math.min(50, Number(count) || 10));
   const src = String(text).replace(/Click to edit Master title style/gi, " ").slice(0, 60000);
@@ -22,14 +22,19 @@ mtf: {type,prompt:(statement),truth:true|false,answer:(correct word that replace
   const user = `Allowed types: ${types.join(", ")}. Write exactly ${n} questions, cycling through the allowed types evenly.\n\nMATERIAL:\n${src}`;
 
   try {
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
+    const model = process.env.MODEL || "gemini-2.5-flash";
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
       method: "POST",
-      headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model: process.env.MODEL || "claude-sonnet-5-5", max_tokens: 12000, system, messages: [{ role: "user", content: user }] }),
+      headers: { "content-type": "application/json", "x-goog-api-key": key },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: system }] },
+        contents: [{ role: "user", parts: [{ text: user }] }],
+        generationConfig: { responseMimeType: "application/json", maxOutputTokens: 16000 },
+      }),
     });
     const d = await r.json();
     if (!r.ok) return res.status(502).json({ error: d.error?.message || "API error" });
-    const raw = d.content.map((c) => c.text || "").join("").replace(/```json|```/g, "").trim();
+    const raw = (d.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("").replace(/```json|```/g, "").trim();
     const questions = JSON.parse(raw.slice(raw.indexOf("["), raw.lastIndexOf("]") + 1));
     res.status(200).json({ questions });
   } catch (e) {
