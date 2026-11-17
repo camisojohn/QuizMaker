@@ -35,7 +35,7 @@ Return ONLY a JSON array, no markdown.\n${spec}`;
 const user = `Allowed types: ${types.join(", ")}. Write exactly ${n} questions, cycling through the allowed types evenly.\n\nMATERIAL:\n${src}`;
 
   try {
-    const models = [process.env.MODEL || "gemini-3.8-flash", "gemini-3.5-flash-lite"];
+   const models = [process.env.MODEL || "gemini-2.5-flash", "gemini-2.0-flash"];
     let d, ok = false, err = "";
     for (let i = 0; i < 4 && !ok; i++) {
       const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${models[i < 2 ? 0 : 1]}:generateContent`, {
