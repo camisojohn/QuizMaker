@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Samantha's QuizForge 🥑</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&display=swap" rel="stylesheet">
+<style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);box-sizing:border-box}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{background:#f3f2e4;background:linear-gradient(180deg,#e9edd3 0,#f6f4e8 340px) fixed}.font-display{font-family:'Fraunces',Georgia,serif}</style>
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script>tailwind.config={theme:{extend:{colors:{indigo:{50:'#f1f4e6',100:'#e2e9cc',200:'#c8d4a0',300:'#a8ba74',400:'#889d52',500:'#6b7f3b',600:'#55662f',700:'#4b5320',800:'#3a421a',900:'#2b3214'},slate:{50:'#f7f6ee',100:'#efeee0',200:'#dfdcc9',300:'#c6c2a9',400:'#9b9b83',500:'#6e715d',600:'#53563f',700:'#40432f',800:'#2e3125',900:'#1f2318'}}}}}</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lucide@0.294.0/dist/umd/lucide.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+</head>
+<body class="text-slate-800 antialiased">
+<div id="root"></div>
+<script type="text/babel">
+const { useState } = React;
+
+/* ---------- Icons (Lucide) ---------- */
+const Icon = ({ n, c = "w-5 h-5" }) => {
+  let node = window.lucide && window.lucide.icons && window.lucide.icons[n];
+  if (Array.isArray(node) && node[0] === "svg") node = node[2];
+  if (!Array.isArray(node) || !node.every(Array.isArray)) return <span className={c} />;
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={c}>
+      {node.map(([t, p], i) => React.createElement(t, { key: i, ...p }))}
+    </svg>
+  );
+};
+
+const Avocado = ({ size = 64 }) => (
+  <svg viewBox="0 0 64 64" width={size} height={size} aria-hidden="true">
+    <path d="M32 3c-8 0-12 10-12 18 0 4-8 8-8 20 0 12 9 20 20 20s20-8 20-20c0-12-8-16-8-20 0-8-4-18-12-18z" fill="#4b5320" />
+    <path d="M32 3c-8 0-12 10-12 18 0 4-8 8-8 20 0 12 9 20 20 20s20-8 20-20c0-12-8-16-8-20 0-8-4-18-12-18z" fill="#cfe08a" transform="translate(32 38) scale(.8) translate(-32 -38)" />
+    <circle cx="32" cy="42" r="9" fill="#7a4e2d" />
+    <circle cx="29" cy="39" r="2.5" fill="#a47348" />
+  </svg>
+);
+
+
+const SUPABASE_URL = "https://ciddqhoyvidjipgsztxp.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_OD9EiTNG0itQklfp22BvAA_18Trc9Jt";
+const LS = "quizforge:v2";
+let SB = null;
+async function initStore() {
+  try {
+    if (!SUPABASE_URL.startsWith("https://") || SUPABASE_URL.includes("YOUR-PROJECT") || !window.supabase) return;
+    SB = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    const { error } = await SB.from("quizzes").select("id").limit(1);
+    if (error) { console.warn("Supabase unavailable:", error.message); SB = null; }
+  } catch { SB = null; }
+}
+const lsAll = () => { try { return JSON.parse(localStorage.getItem(LS)) || []; } catch { return []; } };
+const lsPut = (a) => { try { localStorage.setItem(LS, JSON.stringify(a)); } catch {} };
+const pack = (r) => ({ id: r.id, title: r.title, created_at: r.createdAt, questions: r.questions, attempts: r.attempts });
+const unpack = (d) => ({ id: d.id, title: d.title, createdAt: d.created_at, questions: d.questions, attempts: d.attempts || [] });
+async function listQuizzes() {
+  let rows = lsAll();
+  if (SB) {
+    const { data, error } = await SB.from("quizzes").select("*").order("created_at", { ascending: false });
+    if (error) { console.warn(error.message); SB = null; } else rows = data.map(unpack);
+  }
+  return rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+async function putQuiz(r) {
+  if (SB) {
+    const { error } = await SB.from("quizzes").upsert(pack(r));
+    if (!error) return;
+    console.warn(error.message); SB = null;
+  }
+  lsPut([r, ...lsAll().filter((x) => x.id !== r.id)]);
+}
+async function removeQuiz(id) {
+  if (SB) {
+    const { error } = await SB.from("quizzes").delete().eq("id", id);
+    if (!error) return;
+    console.warn(error.message); SB = null;
+  }
+  lsPut(lsAll().filter((x) => x.id !== id));
+}
+function buildResult(questions, answers, prev) {
+  const items = questions.map((q) => {
+    const g = grade(q, answers[q.id]);
+    const before = prev && prev.results && prev.results[q.id];
+    const status = before === undefined ? "New" : g.correct ? (before ? "Consistent" : "Improved") : before ? "Regressed" : "Missed Again";
+    return { ...q, ...g, status };
+  });
+  const score = items.filter((i) => i.correct).length, total = questions.length;
+  return { score, total, pct: Math.round((score / total) * 100), items, prev: prev && { score: prev.score, total: prev.total, pct: prev.pct, date: prev.date } };
+}
+
+/* ---------- File parsing ---------- */
+async function readFile(f) {
+  const ext = f.name.split(".").pop().toLowerCase();
+  if (ext === "txt") return f.text();
+  const data = await f.arrayBuffer();
+  if (ext === "docx") return (await mammoth.extractRawText({ arrayBuffer: data })).value;
+  if (ext === "pdf") {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    const pdf = await pdfjsLib.getDocument({ data }).promise;
+    let t = "";
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const c = await (await pdf.getPage(i)).getTextContent();
+      t += c.items.map((x) => x.str).join(" ") + "\n";
+    }
+    return t;
+  }
+  throw new Error("Unsupported file type. Use .txt, .pdf or .docx");
+}
+
+/* ---------- Question generator (offline fallback) ---------- */
+const STOP = new Set("about after again also because been before being between both could does doing during each from have having here into just more most other over same should some such than that their them then there these they this those through under until very were what when where which while will with would your".split(" "));
+const shuffle = (a) => { const r = [...a]; for (let i = r.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [r[i], r[j]] = [r[j], r[i]]; } return r; };
+const rnd = (a, b) => Math.floor(Math.random() * (b - a + 1)) + a;
+const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9. ]/g, "").trim();
+const kws = (s) => [...new Set((s.match(/[A-Za-z][A-Za-z-]{4,}/g) || []).filter((w) => !STOP.has(w.toLowerCase())))];
+const blank = (s, k) => s.replace(new RegExp("\\b" + k + "\\b", "i"), "_____");
+const cut = (s, n = 110) => (s.length > n ? s.slice(0, n) + "…" : s);
+
+const TYPES = [
+  ["mcq", "Multiple Choice", "4-option selection", "ListChecks"],
+  ["tf", "True or False", "Judge a statement", "CheckCheck"],
+  ["ident", "Identification", "Type the exact term", "Type"],
+  ["enum", "Enumeration", "List several items", "List"],
+  ["match", "Matching Type", "Column A ↔ Column B", "Shuffle"],
+  ["fill", "Fill in the Blanks", "Supply the missing word", "TextCursorInput"],
+  ["short", "Short Answer", "1–2 sentence response", "MessageSquare"],
+  ["prob", "Problem Solving", "Calculation with steps", "Calculator"],
+  ["scen", "Scenario-Based", "Case study + analysis", "Briefcase"],
+  ["mtf", "Modified True/False", "Fix false statements", "PenLine"],
+];
+
+function generate(text, types, count) {
+  let sents = text.replace(/\s+/g, " ").split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter((s) => s.split(" ").length >= 5 && kws(s).length);
+  if (!sents.length) sents = [text.trim().slice(0, 200) || "Learning requires practice and review of core concepts."];
+  const pool = [...new Set(sents.flatMap(kws))];
+  const filler = ["Process", "System", "Function", "Structure", "Theory", "Method"];
+  const distract = (k, n) => shuffle([...pool, ...filler].filter((w) => w.toLowerCase() !== k.toLowerCase())).slice(0, n);
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const type = types[i % types.length];
+    const s = sents[(i * 3 + Math.floor(i / types.length)) % sents.length];
+    const ks = kws(s), k = ks[rnd(0, ks.length - 1)];
+    const q = { id: "q" + i, type };
+    if (type === "mcq") Object.assign(q, { prompt: `Which term best completes this statement?\n"${blank(s, k)}"`, options: shuffle([k, ...distract(k, 3)]), answer: k });
+    else if (type === "tf") {
+      const truth = Math.random() > 0.5, w = distract(k, 1)[0];
+      Object.assign(q, { prompt: truth ? s : s.replace(new RegExp("\\b" + k + "\\b", "i"), w), answer: truth ? "True" : "False", options: ["True", "False"] });
+    } else if (type === "ident") Object.assign(q, { prompt: `Identify the term that fits the blank:\n"${blank(s, k)}"`, answer: k });
+    else if (type === "enum") { const a = ks.slice(0, 3); Object.assign(q, { prompt: `Enumerate ${a.length} key term(s) found in this statement (separate with commas):\n"${s}"`, answer: a }); }
+    else if (type === "match") {
+      const picks = shuffle(sents).slice(0, 4).map((x) => { const kk = kws(x); return { l: kk[0], r: cut(blank(x, kk[0]), 90) }; });
+      const uniq = picks.filter((p, j) => picks.findIndex((z) => z.l === p.l) === j);
+      Object.assign(q, { prompt: "Match each term in Column A to its description in Column B.", pairs: uniq, rights: shuffle(uniq.map((p) => p.r)) });
+    } else if (type === "fill") Object.assign(q, { prompt: `Fill in the blank:\n"${blank(s, k)}"`, answer: k });
+    else if (type === "short") Object.assign(q, { prompt: `In 1–2 sentences, explain the idea behind: "${cut(s, 140)}"`, answer: s, keys: ks });
+    else if (type === "prob") {
+      const a = rnd(3, 12), b = rnd(2, 9);
+      Object.assign(q, { prompt: `A study of "${k}" records ${a} samples per day for ${b} days, then adds ${a} extra samples. How many samples in total?`, s1: a * b, answer: a * b + a });
+    } else if (type === "scen") Object.assign(q, { scenario: `A team is analysing a case: "${blank(s, k)}" Their notes are missing one key concept.`, prompt: "Which concept should the team apply to complete their analysis?", options: shuffle([k, ...distract(k, 3)]), answer: k });
+    else if (type === "mtf") {
+      const truth = Math.random() > 0.5, w = distract(k, 1)[0];
+      Object.assign(q, { prompt: truth ? s : s.replace(new RegExp("\\b" + k + "\\b", "i"), w), truth, answer: k, shown: w });
+    }
+    out.push(q);
+  }
+  return out;
+}
+
+/* ---------- Grading ---------- */
+function grade(q, a) {
+  const r = (correct, user, right) => ({ correct, user: user || "(no answer)", right });
+  switch (q.type) {
+    case "mcq": case "tf": case "scen": return r(a === q.answer, a, q.answer);
+    case "ident": case "fill": return r(norm(a) === norm(q.answer), a, q.answer);
+    case "enum": {
+      const given = (a || "").split(/[,;\n]/).map(norm).filter(Boolean);
+      const ok = q.answer.every((x) => given.includes(norm(x)));
+      return r(ok, a, q.answer.join(", "));
+    }
+    case "match": {
+      const ok = q.pairs.every((p, i) => a && a[i] === p.r);
+      const u = q.pairs.map((p, i) => `${p.l} → ${a && a[i] ? cut(a[i], 40) : "—"}`).join("; ");
+      return r(ok, u, q.pairs.map((p) => `${p.l} → ${cut(p.r, 40)}`).join("; "));
+    }
+    case "short": {
+      const t = norm(a), hit = q.keys.filter((k) => t.includes(norm(k))).length;
+      return r(t.length > 10 && hit / Math.max(1, Math.min(q.keys.length, 5)) >= 0.4, a, q.answer);
+    }
+    case "prob": {
+      const ok = a && Number(a.fin) === q.answer && Number(a.s1) === q.s1;
+      return r(!!ok, a && `Step 1: ${a.s1 ?? "—"}; Final: ${a.fin ?? "—"}`, `Step 1: ${q.s1}; Final: ${q.answer}`);
+    }
+    case "mtf": {
+      const ok = a && (q.truth ? a.tf === "True" : a.tf === "False" && norm(a.fix) === norm(q.answer));
+      return r(!!ok, a && `${a.tf || "—"}${a.fix ? " (correction: " + a.fix + ")" : ""}`, q.truth ? "True" : `False — correct word: ${q.answer}`);
+    }
+  }
+}
+
+/* ---------- UI atoms ---------- */
+const Btn = ({ children, v = "primary", ...p }) => (
+  <button {...p} className={`inline-flex items-center justify-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold transition disabled:opacity-40 disabled:cursor-not-allowed ${v === "primary" ? "bg-indigo-600 text-white hover:bg-indigo-700" : "bg-white text-slate-700 border border-slate-300 hover:bg-slate-50"} ${p.className || ""}`}>{children}</button>
+);
+const Card = ({ children, className = "" }) => <div className={`bg-white border border-slate-200 rounded-xl shadow-sm p-5 sm:p-7 ${className}`}>{children}</div>;
+const inp = "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500";
+
+function Stepper({ step }) {
+  const L = ["Upload", "Configure", "Quiz", "Results"];
+  return (
+    <div className="flex items-center justify-center gap-2 mb-8 text-xs sm:text-sm">
+      {L.map((l, i) => (
+        <React.Fragment key={l}>
+          <div className={`flex items-center gap-1.5 ${i + 1 <= step ? "text-indigo-700 font-semibold" : "text-slate-400"}`}>
+            <span className={`w-6 h-6 rounded-full grid place-items-center text-xs ${i + 1 <= step ? "bg-indigo-600 text-white" : "bg-slate-200"}`}>{i + 1}</span>
+            <span className="hidden sm:inline">{l}</span>
+          </div>
+          {i < 3 && <div className="w-6 sm:w-10 h-px bg-slate-300" />}
+        </React.Fragment>
+      ))}
+    </div>
+  );
+}
+
+/* ---------- Shared bits ---------- */
+function Confirm({ title, body, yes, no = "Keep going", onYes, onNo }) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" onClick={onNo}>
+      <div className="bg-white rounded-xl p-6 max-w-sm w-full shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <h3 className="font-display text-lg font-bold text-indigo-800 mb-1">{title}</h3>
+        <p className="text-sm text-slate-600 mb-5">{body}</p>
+        <div className="flex justify-end gap-2"><Btn v="secondary" onClick={onNo}>{no}</Btn><Btn onClick={onYes}>{yes}</Btn></div>
+      </div>
+    </div>
+  );
+}
+
+function MyQuizzes({ records, booting, mode, onReview, onStart, onDelete }) {
+  return (
+    <div className="mt-8">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="font-display text-xl font-bold text-indigo-800">Your quizzes</h2>
+        <span className="text-xs text-slate-500 flex items-center gap-1"><Icon n={mode === "cloud" ? "Cloud" : "HardDrive"} c="w-3.5 h-3.5" />{mode === "cloud" ? "Saved to Supabase" : "Saved on this device"}</span>
+      </div>
+      {booting ? <p className="text-sm text-slate-500">Loading your quizzes…</p>
+        : !records.length ? <p className="text-sm text-slate-500">Quizzes you make will show up here 💚</p>
+        : <div className="space-y-3">{records.map((r) => {
+          const last = r.attempts[r.attempts.length - 1];
+          return (
+            <div key={r.id} className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap items-center gap-3">
+              <div className="flex-1 min-w-[10rem]">
+                <p className="font-semibold">{r.title}</p>
+                <p className="text-xs text-slate-500">{r.questions.length} questions · {new Date(r.createdAt).toLocaleDateString()} · {last ? `${r.attempts.length} attempt(s), last ${last.score}/${last.total}` : "not attempted yet"}</p>
+              </div>
+              {last && <Btn v="secondary" className="!py-1.5" onClick={() => onReview(r)}><Icon n="Eye" c="w-4 h-4" />Review</Btn>}
+              <Btn className="!py-1.5" onClick={() => onStart(r)}><Icon n="Play" c="w-4 h-4" />{last ? "Retake" : "Start"}</Btn>
+              <button onClick={() => onDelete(r)} className="text-slate-400 hover:text-rose-600 p-1.5" aria-label="Delete quiz"><Icon n="Trash2" c="w-4 h-4" /></button>
+            </div>
+          );
+        })}</div>}
+    </div>
+  );
+}
+
+/* ---------- Step 1 ---------- */
+function UploadStep({ title, setTitle, text, setText, onNext }) {
+  const [tab, setTab] = useState("file");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [fname, setFname] = useState("");
+  const [drag, setDrag] = useState(false);
+  const handle = async (f) => {
+    if (!f) return;
+    setErr(""); setBusy(true);
+    try { const t = await readFile(f); if (t.trim().length < 20) throw new Error("Couldn't find enough text in that file."); setText(t); setFname(f.name); }
+    catch (e) { setErr(e.message || "Failed to read file."); setText(""); setFname(""); }
+    setBusy(false);
+  };
+  const ready = title.trim() && text.trim().length >= 20;
+  return (
+    <div>
+      <div className="text-center mb-8">
+        <div className="inline-flex items-center gap-2 bg-indigo-100 text-indigo-800 rounded-full px-3 py-1 text-xs font-semibold mb-3"><Icon n="Heart" c="w-4 h-4" />Made with love for Samantha Colin Perez</div>
+        <h1 className="font-display text-3xl sm:text-4xl font-bold text-indigo-800">Hi, My Baby💚</h1>
+        <p className="text-slate-500 mt-2">Whatever you study today, I believe in you and you can do it.</p>
+      </div>
+      <Card>
+        <label className="block text-sm font-semibold mb-1">Quiz title <span className="text-rose-600">*</span></label>
+        <input className={inp} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Biology Chapter 4" />
+        <div className="flex gap-1 mt-6 mb-4 bg-slate-100 p-1 rounded-lg w-fit">
+          {[["file", "Upload File"], ["paste", "Paste Study Text"]].map(([k, l]) => (
+            <button key={k} onClick={() => setTab(k)} className={`px-4 py-1.5 rounded-md text-sm font-medium ${tab === k ? "bg-white shadow text-indigo-700" : "text-slate-500"}`}>{l}</button>
+          ))}
+        </div>
+        {tab === "file" ? (
+          <label onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)}
+            onDrop={(e) => { e.preventDefault(); setDrag(false); handle(e.dataTransfer.files[0]); }}
+            className={`flex flex-col items-center justify-center text-center gap-2 border-2 border-dashed rounded-xl py-12 px-4 cursor-pointer transition ${drag ? "border-indigo-500 bg-indigo-50" : "border-slate-300 hover:border-indigo-400"}`}>
+            <input type="file" accept=".txt,.pdf,.docx" className="hidden" onChange={(e) => handle(e.target.files[0])} />
+            {busy ? <Icon n="Loader2" c="w-8 h-8 animate-spin text-indigo-600" /> : fname ? <Icon n="FileCheck" c="w-8 h-8 text-emerald-600" /> : <Icon n="UploadCloud" c="w-8 h-8 text-indigo-600" />}
+            <span className="font-medium">{busy ? "Reading file…" : fname ? `${fname} loaded (${text.length.toLocaleString()} characters)` : "Drag & drop or click to browse"}</span>
+            <span className="text-xs text-slate-500">.txt, .pdf, .docx</span>
+          </label>
+        ) : (
+          <textarea className={inp + " h-56"} value={text} onChange={(e) => setText(e.target.value)} placeholder="Paste at least a few full sentences of study material…" />
+        )}
+        {err && <p className="mt-3 text-sm text-rose-600 flex items-center gap-1.5"><Icon n="AlertCircle" c="w-4 h-4" />{err}</p>}
+        <div className="flex justify-end mt-6"><Btn disabled={!ready} onClick={onNext}>Next: Configure Quiz <Icon n="ArrowRight" c="w-4 h-4" /></Btn></div>
+      </Card>
+    </div>
+  );
+}
+
+/* ---------- Step 2 ---------- */
+function ConfigStep({ types, setTypes, count, setCount, onBack, onGenerate, loading }) {
+  const toggle = (k) => setTypes(types.includes(k) ? types.filter((x) => x !== k) : [...types, k]);
+  const setN = (v) => setCount(Math.max(5, Math.min(50, Number(v) || 5)));
+  return (
+    <Card>
+      <h2 className="text-xl font-bold">Configure your quiz</h2>
+      <p className="text-sm text-slate-500 mb-4">Select one or more formats.</p>
+      <div className="grid sm:grid-cols-2 gap-3">
+        {TYPES.map(([k, name, desc, ic]) => {
+          const on = types.includes(k);
+          return (
+            <button key={k} onClick={() => toggle(k)} className={`flex items-center gap-3 text-left rounded-lg border p-3 transition ${on ? "border-indigo-500 bg-indigo-50 ring-1 ring-indigo-500" : "border-slate-200 hover:border-slate-300"}`}>
+              <span className={`w-9 h-9 rounded-lg grid place-items-center ${on ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-500"}`}><Icon n={ic} c="w-5 h-5" /></span>
+              <span className="flex-1"><span className="block font-semibold text-sm">{name}</span><span className="block text-xs text-slate-500">{desc}</span></span>
+              {on && <Icon n="CheckCircle2" c="w-5 h-5 text-indigo-600" />}
+            </button>
+          );
+        })}
+      </div>
+      <div className="mt-6">
+        <label className="text-sm font-semibold">Number of questions</label>
+        <div className="flex items-center gap-4 mt-2">
+          <input type="range" min="5" max="50" value={count} onChange={(e) => setN(e.target.value)} className="flex-1 accent-indigo-600" />
+          <input type="number" min="5" max="50" value={count} onChange={(e) => setN(e.target.value)} className={inp + " !w-20 text-center"} />
+        </div>
+      </div>
+      <div className="flex justify-between mt-8">
+        <Btn v="secondary" onClick={onBack}><Icon n="ArrowLeft" c="w-4 h-4" />Back</Btn>
+        <Btn disabled={!types.length || loading} onClick={onGenerate}>
+          {loading ? <><Icon n="Loader2" c="w-4 h-4 animate-spin" />Steeping your quiz…</> : <><Icon n="Wand2" c="w-4 h-4" />Generate Quiz</>}
+        </Btn>
+      </div>
+    </Card>
+  );
+}
+
+/* ---------- Step 3 ---------- */
+const Opt = ({ label, sel, onClick }) => (
+  <button onClick={onClick} className={`w-full text-left rounded-lg border px-4 py-3 text-sm transition ${sel ? "border-indigo-500 bg-indigo-50 font-medium" : "border-slate-200 hover:bg-slate-50"}`}>
+    <span className={`inline-block w-4 h-4 rounded-full border mr-3 align-middle ${sel ? "border-indigo-600 bg-indigo-600 ring-2 ring-white ring-inset" : "border-slate-400"}`} />{label}
+  </button>
+);
+
+function QuestionInput({ q, a, set }) {
+  if (q.type === "mcq" || q.type === "tf" || q.type === "scen")
+    return <div className="space-y-2">{q.options.map((o) => <Opt key={o} label={o} sel={a === o} onClick={() => set(o)} />)}</div>;
+  if (q.type === "ident" || q.type === "fill") return <input className={inp} value={a || ""} onChange={(e) => set(e.target.value)} placeholder="Your answer" />;
+  if (q.type === "enum" || q.type === "short") return <textarea className={inp + " h-28"} value={a || ""} onChange={(e) => set(e.target.value)} placeholder={q.type === "enum" ? "item 1, item 2, item 3" : "Write 1–2 sentences…"} />;
+  if (q.type === "match")
+    return (
+      <div className="space-y-3">
+        {q.pairs.map((p, i) => (
+          <div key={i} className="grid sm:grid-cols-[10rem_1fr] gap-2 items-center">
+            <div className="font-semibold text-sm bg-slate-100 rounded-lg px-3 py-2">{String.fromCharCode(65 + i)}. {p.l}</div>
+            <select className={inp} value={(a && a[i]) || ""} onChange={(e) => set({ ...(a || {}), [i]: e.target.value })}>
+              <option value="">Select match…</option>
+              {q.rights.map((r) => <option key={r} value={r}>{r}</option>)}
+            </select>
+          </div>
+        ))}
+      </div>
+    );
+  if (q.type === "prob")
+    return (
+      <div className="space-y-3">
+        <div><label className="text-xs font-semibold text-slate-500">Step 1: samples collected over all days</label><input type="number" className={inp} value={a?.s1 ?? ""} onChange={(e) => set({ ...(a || {}), s1: e.target.value })} /></div>
+        <div><label className="text-xs font-semibold text-slate-500">Final answer</label><input type="number" className={inp} value={a?.fin ?? ""} onChange={(e) => set({ ...(a || {}), fin: e.target.value })} /></div>
+      </div>
+    );
+  if (q.type === "mtf")
+    return (
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-2">{["True", "False"].map((o) => <Opt key={o} label={o} sel={a?.tf === o} onClick={() => set({ ...(a || {}), tf: o })} />)}</div>
+        {a?.tf === "False" && <div><label className="text-xs font-semibold text-slate-500">Which word is wrong? Type the correct word that should replace it.</label><input className={inp} value={a.fix || ""} onChange={(e) => set({ ...a, fix: e.target.value })} /></div>}
+      </div>
+    );
+  return null;
+}
+
+function QuizStep({ title, quiz, answers, setAnswers, idx, setIdx, onSubmit, onExit }) {
+  const q = quiz[idx], pct = ((idx + 1) / quiz.length) * 100;
+  const label = TYPES.find((t) => t[0] === q.type)[1];
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-3"><h2 className="font-display text-lg font-bold text-indigo-800">{title}</h2><Btn v="secondary" className="!py-1.5" onClick={onExit}><Icon n="LogOut" c="w-4 h-4" />Exit quiz</Btn></div>
+      <div className="flex justify-between text-sm text-slate-500 mt-2 mb-1"><span>Question {idx + 1} of {quiz.length}</span><span>{Math.round(pct)}%</span></div>
+      <div className="h-2 bg-slate-200 rounded-full overflow-hidden mb-5"><div className="h-full bg-indigo-600 transition-all" style={{ width: pct + "%" }} /></div>
+      <Card>
+        <span className="inline-block text-xs font-semibold bg-indigo-50 text-indigo-700 rounded-full px-2.5 py-1 mb-3">{label}</span>
+        {q.scenario && <div className="bg-slate-50 border-l-4 border-indigo-400 rounded p-3 text-sm mb-3">{q.scenario}</div>}
+        {q.type === "mtf" && <p className="text-xs text-slate-500 mb-1">Decide if the statement is true. If false, identify the correct word.</p>}
+        <p className="text-base font-medium whitespace-pre-line mb-5">{q.prompt}</p>
+        <QuestionInput q={q} a={answers[q.id]} set={(v) => setAnswers({ ...answers, [q.id]: v })} />
+      </Card>
+      <div className="flex justify-between mt-5">
+        <Btn v="secondary" disabled={idx === 0} onClick={() => setIdx(idx - 1)}><Icon n="ArrowLeft" c="w-4 h-4" />Previous</Btn>
+        {idx < quiz.length - 1 ? <Btn onClick={() => setIdx(idx + 1)}>Next<Icon n="ArrowRight" c="w-4 h-4" /></Btn>
+          : <Btn onClick={onSubmit}><Icon n="Send" c="w-4 h-4" />Submit Quiz</Btn>}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Step 4 ---------- */
+function ResultsStep({ quiz, result, onRetake, onNew }) {
+  const { score, total, pct, prev, items } = result;
+  const pass = pct >= 70;
+  const delta = prev ? pct - prev.pct : null;
+  const badge = (b) => ({
+    Improved: "bg-emerald-100 text-emerald-700", "Missed Again": "bg-rose-100 text-rose-700",
+    Consistent: "bg-slate-100 text-slate-600", "Regressed": "bg-amber-100 text-amber-700", New: "bg-indigo-100 text-indigo-700",
+  }[b]);
+  return (
+    <div className="space-y-5">
+      <Card className="text-center">
+        <p className="font-display text-xl text-indigo-700 mb-2">{pass ? "Yey, congrats baby! I'm so proud of you. I love you so much! 💚" : "Try again, baby — you can do it! I believe in you, and I'm proud of you for trying. 💚"}</p>
+        <p className="text-sm text-slate-500">Your score</p>
+        <p className="text-5xl font-bold text-slate-900 my-1">{score}/{total}</p>
+        <p className="text-xl text-slate-600">{pct}%</p>
+        <span className={`inline-flex items-center gap-1.5 mt-3 rounded-full px-4 py-1 text-sm font-semibold ${pass ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
+          <Icon n={pass ? "CheckCircle2" : "XCircle"} c="w-4 h-4" />{pass ? "Passed" : "Not yet"} (pass mark 70%)
+        </span>
+      </Card>
+
+      <Card>
+        <h3 className="font-bold mb-3 flex items-center gap-2"><Icon n="TrendingUp" c="w-5 h-5 text-indigo-600" />Attempt comparison</h3>
+        {!prev ? <p className="text-sm text-slate-500">This is your first attempt for this quiz title. Retake it to see your progress.</p> : (
+          <>
+            <p className={`text-lg font-semibold mb-3 ${delta > 0 ? "text-emerald-600" : delta < 0 ? "text-rose-600" : "text-slate-600"}`}>
+              {delta > 0 ? `+${delta}% improvement` : delta < 0 ? `${delta}% decline` : "No change"} <span className="text-sm font-normal text-slate-500">({prev.score}/{prev.total} vs. {score}/{total})</span>
+            </p>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              {[["Previous attempt", prev.score, prev.total - prev.score, prev.date], ["This attempt", score, total - score, result.date]].map(([l, r, w, d]) => (
+                <div key={l} className="border border-slate-200 rounded-lg p-3">
+                  <p className="font-semibold">{l}</p><p className="text-xs text-slate-400 mb-2">{d.length > 12 ? new Date(d).toLocaleString() : d}</p>
+                  <p className="text-emerald-600">✔ {r} right</p><p className="text-rose-600">✘ {w} wrong</p>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </Card>
+
+      <Card>
+        <h3 className="font-bold mb-3">Question breakdown</h3>
+        <div className="space-y-3">
+          {items.map((it, i) => (
+            <div key={it.id} className={`rounded-lg border p-3 text-sm ${it.correct ? "border-emerald-200 bg-emerald-50" : "border-rose-200 bg-rose-50"}`}>
+              <div className="flex justify-between gap-2 mb-1">
+                <p className="font-medium whitespace-pre-line">{i + 1}. {it.scenario ? it.scenario + " " : ""}{it.prompt}</p>
+                <span className={`shrink-0 h-fit text-xs font-semibold rounded-full px-2 py-0.5 ${badge(it.status)}`}>{it.status}</span>
+              </div>
+              <p className={it.correct ? "text-emerald-800" : "text-rose-700"}><b>Your answer:</b> {it.user}</p>
+              {!it.correct && <p className="text-amber-800"><b>Correct answer:</b> {it.right}</p>}
+            </div>
+          ))}
+        </div>
+      </Card>
+      <div className="flex flex-wrap gap-3 justify-center">
+        <Btn onClick={onRetake}><Icon n="RotateCcw" c="w-4 h-4" />Retake Quiz</Btn>
+        <Btn v="secondary" onClick={onNew}><Icon n="FilePlus" c="w-4 h-4" />Back to My Quizzes</Btn>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- App ---------- */
+function App() {
+  const [step, setStep] = useState(1);
+  const [title, setTitle] = useState("");
+  const [text, setText] = useState("");
+  const [types, setTypes] = useState(["mcq", "tf", "ident"]);
+  const [count, setCount] = useState(10);
+  const [loading, setLoading] = useState(false);
+  const [rec, setRec] = useState(null);
+  const [answers, setAnswers] = useState({});
+  const [idx, setIdx] = useState(0);
+  const [result, setResult] = useState(null);
+  const [records, setRecords] = useState([]);
+  const [booting, setBooting] = useState(true);
+  const [mode, setMode] = useState("device");
+  const [confirm, setConfirm] = useState(null);
+
+  const refresh = async () => { setRecords(await listQuizzes()); setMode(SB ? "cloud" : "device"); };
+  React.useEffect(() => { (async () => { await initStore(); await refresh(); setBooting(false); })(); }, []);
+
+  const startQuiz = (r) => { setRec(r); setAnswers({}); setIdx(0); setResult(null); setStep(3); };
+  const onGenerate = () => {
+    setLoading(true);
+    setTimeout(async () => {
+      const r = { id: Date.now().toString(36), title: title.trim(), createdAt: new Date().toISOString(), questions: generate(text, types, count), attempts: [] };
+      await putQuiz(r);
+      setLoading(false); startQuiz(r); refresh();
+    }, 900);
+  };
+  const onSubmit = async () => {
+    const prev = rec.attempts[rec.attempts.length - 1] || null;
+    const date = new Date().toISOString();
+    const r = buildResult(rec.questions, answers, prev);
+    const attempt = { date, score: r.score, total: r.total, pct: r.pct, answers, results: Object.fromEntries(r.items.map((i) => [i.id, i.correct])) };
+    const next = { ...rec, attempts: [...rec.attempts, attempt].slice(-20) };
+    await putQuiz(next);
+    setRec(next); setResult({ ...r, date }); setStep(4); refresh();
+  };
+  const onReview = (r) => {
+    const last = r.attempts[r.attempts.length - 1], prev = r.attempts[r.attempts.length - 2] || null;
+    setRec(r); setResult({ ...buildResult(r.questions, last.answers, prev), date: last.date }); setStep(4);
+  };
+  const toHome = () => { setTitle(""); setText(""); setRec(null); setResult(null); setAnswers({}); setConfirm(null); setStep(1); refresh(); };
+  const askExit = () => setConfirm({ title: "Leave this quiz?", body: "Your answers on this try won't be saved.", yes: "Yes, exit", onYes: toHome });
+  const askDelete = (r) => setConfirm({ title: "Delete this quiz?", body: `"${r.title}" and all its attempts will be removed.`, yes: "Delete", no: "Keep it", onYes: async () => { setConfirm(null); await removeQuiz(r.id); refresh(); } });
+
+  return (
+    <div className="max-w-3xl mx-auto px-4 py-8">
+      <Stepper step={step} />
+      {step === 1 && <>
+        <UploadStep {...{ title, setTitle, text, setText }} onNext={() => setStep(2)} />
+        <MyQuizzes {...{ records, booting, mode }} onReview={onReview} onStart={startQuiz} onDelete={askDelete} />
+      </>}
+      {step === 2 && <ConfigStep {...{ types, setTypes, count, setCount, loading, onGenerate }} onBack={() => setStep(1)} />}
+      {step === 3 && rec && <QuizStep {...{ answers, setAnswers, idx, setIdx, onSubmit }} title={rec.title} quiz={rec.questions} onExit={askExit} />}
+      {step === 4 && result && rec && <ResultsStep quiz={rec.questions} result={result} onRetake={() => startQuiz(rec)} onNew={toHome} />}
+      {confirm && <Confirm {...confirm} onNo={() => setConfirm(null)} />}
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
