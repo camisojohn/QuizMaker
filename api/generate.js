@@ -5,7 +5,6 @@ export default async function handler(req, res) {
   const { text = "", types = [], count = 10 } = req.body || {};
   const n = Math.max(5, Math.min(50, Number(count) || 10));
   
-  // Lower the slice limit from 60000 to 15000 to prevent timeouts
   const src = String(text).replace(/Click to edit Master title style/gi, " ").slice(0, 15000);
   const spec = `Each question is a JSON object. Fields by "type":
 mcq: {type,prompt,options:[4 strings],answer:(exactly one of options)}
@@ -32,7 +31,8 @@ Return ONLY a JSON array, no markdown.\n${spec}`;
 const user = `Allowed types: ${types.join(", ")}. Write exactly ${n} questions, cycling through the allowed types evenly.\n\nMATERIAL:\n${src}`;
 
   try {
-    const model = process.env.MODEL || "gemini-2.5-flash";
+    // Updated to the current supported model version
+    const model = process.env.MODEL || "gemini-3.8-flash";
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-goog-api-key": key },
