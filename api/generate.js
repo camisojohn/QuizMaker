@@ -19,7 +19,6 @@ prob: {type,prompt:(2-step numeric problem),s1:(number after step 1),answer:(fin
 scen: {type,scenario,prompt,options:[4 strings],answer:(one of options)}
 mtf: {type,prompt:(statement),truth:true|false,answer:(correct word that replaces the wrong one; "" if truth),shown:(the wrong word in the statement; "" if truth)}`;
 
-
 const system = `You write professional, clean exam questions from lecture material extracted from presentation slides. 
 
 CRITICAL CLEANUP RULES:
@@ -29,29 +28,23 @@ CRITICAL CLEANUP RULES:
 4. Make wrong options plausible, not random. Make answers unambiguous. For true/false and mtf, mix true and false. 
 
 Return ONLY a JSON array, no markdown.\n${spec}`;
- 
-
 
 const user = `Allowed types: ${types.join(", ")}. Write exactly ${n} questions, cycling through the allowed types evenly.\n\nMATERIAL:\n${src}`;
 
   try {
-   const models = [process.env.MODEL || "gemini-2.5-flash", "gemini-2.0-flash"];
-    let d, ok = false, err = "";
-    for (let i = 0; i < 4 && !ok; i++) {
-      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${models[i < 2 ? 0 : 1]}:generateContent`, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-goog-api-key": key },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: system }] },
-          contents: [{ role: "user", parts: [{ text: user }] }],
-        generationConfig: { responseMimeType: "application/json", maxOutputTokens: 8000 },
-        }),
-      });
-      d = await r.json();
-      if (r.ok) ok = true;
-      else { err = d.error?.message || "API error"; await new Promise((s) => setTimeout(s, 2500)); }
-    }
-    if (!ok) return res.status(502).json({ error: err });
+    const model = process.env.MODEL || "gemini-2.5-flash";
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-goog-api-key": key },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: system }] },
+        contents: [{ role: "user", parts: [{ text: user }] }],
+        generationConfig: { responseMimeType: "application/json", maxOutputTokens: 2048 },
+      }),
+    });
+    const d = await r.json();
+    if (!r.ok) return res.status(502).json({ error: d.error?.message || "API error" });
+    
     const raw = (d.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("").replace(/```json|```/g, "").trim();
     const questions = JSON.parse(raw.slice(raw.indexOf("["), raw.lastIndexOf("]") + 1));
     res.status(200).json({ questions });
