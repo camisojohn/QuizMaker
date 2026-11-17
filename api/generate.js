@@ -4,8 +4,9 @@ export default async function handler(req, res) {
   if (!key) return res.status(500).json({ error: "GEMINI_API_KEY not set in Vercel" });
   const { text = "", types = [], count = 10 } = req.body || {};
   const n = Math.max(5, Math.min(50, Number(count) || 10));
-  const src = String(text).replace(/Click to edit Master title style/gi, " ").slice(0, 60000);
-
+  
+  // Lower the slice limit from 60000 to 15000 to prevent timeouts
+  const src = String(text).replace(/Click to edit Master title style/gi, " ").slice(0, 15000);
   const spec = `Each question is a JSON object. Fields by "type":
 mcq: {type,prompt,options:[4 strings],answer:(exactly one of options)}
 tf: {type,prompt:(a full statement),answer:"True"|"False"}
