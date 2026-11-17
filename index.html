@@ -513,7 +513,7 @@ function App() {
     setLoading(true);
     try {
       const res = await fetch("/api/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, types, count }) });
-      const d = await res.json();
+      const d = await res.json().catch(() => ({ error: "Server timed out. Try fewer questions." }));
       if (!res.ok) throw new Error(d.error || "Generation failed");
       const questions = d.questions.map((q, i) => {
         q = { ...q, id: "q" + i };
