@@ -509,13 +509,25 @@ function App() {
   React.useEffect(() => { (async () => { await initStore(); await refresh(); setBooting(false); })(); }, []);
 
   const startQuiz = (r) => { setRec(r); setAnswers({}); setIdx(0); setResult(null); setStep(3); };
-  const onGenerate = () => {
+  const onGenerate = async () => {
     setLoading(true);
-    setTimeout(async () => {
-      const r = { id: Date.now().toString(36), title: title.trim(), createdAt: new Date().toISOString(), questions: generate(text, types, count), attempts: [] };
+    try {
+      const res = await fetch("/api/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, types, count }) });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Generation failed");
+      const questions = d.questions.map((q, i) => {
+        q = { ...q, id: "q" + i };
+        if (q.type === "tf") q.options = ["True", "False"];
+        if (q.type === "match") q.rights = shuffle(q.pairs.map((p) => p.r));
+        return q;
+      });
+      const r = { id: Date.now().toString(36), title: title.trim(), createdAt: new Date().toISOString(), questions, attempts: [] };
       await putQuiz(r);
       setLoading(false); startQuiz(r); refresh();
-    }, 900);
+    } catch (e) {
+      setLoading(false);
+      alert("AI generation failed: " + e.message);
+    }
   };
   const onSubmit = async () => {
     const prev = rec.attempts[rec.attempts.length - 1] || null;
