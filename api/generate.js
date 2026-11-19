@@ -1,5 +1,3 @@
-
-
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
@@ -35,10 +33,11 @@ Return ONLY a JSON array, no markdown.\n${spec}`;
 
   const user = `Allowed types: ${types.join(", ")}. Write exactly ${n} questions, cycling through the allowed types evenly.\n\nMATERIAL:\n${src}`;
 
-  // Main model first, then a fallback if it stays busy
+  // Main model first, then a fallback if it stays busy.
+  // Set MODEL / FALLBACK_MODEL in Vercel to names listed in Google AI Studio.
   const models = [
-    process.env.MODEL || "gemini-3.8-flash",
-    process.env.FALLBACK_MODEL || "gemini-2.5-flash",
+    process.env.MODEL || "gemini-2.5-flash",
+    process.env.FALLBACK_MODEL || "gemini-2.0-flash",
   ];
 
   const payload = JSON.stringify({
@@ -49,10 +48,11 @@ Return ONLY a JSON array, no markdown.\n${spec}`;
 
   const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
 
+  // Fewer retries + shorter waits so the app's offline fallback starts sooner
   async function callGemini() {
     let lastErr = "API error";
     for (const model of models) {
-      for (let attempt = 0; attempt < 3; attempt++) {
+      for (let attempt = 0; attempt < 2; attempt++) {
         try {
           const r = await fetch(
             `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
@@ -70,7 +70,7 @@ Return ONLY a JSON array, no markdown.\n${spec}`;
         } catch (e) {
           lastErr = String(e.message || e);
         }
-        await sleep(1500 * (attempt + 1));
+        await sleep(800 * (attempt + 1));
       }
     }
     throw new Error(lastErr);

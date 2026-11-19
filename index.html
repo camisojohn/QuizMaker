@@ -499,26 +499,52 @@ function App() {
   React.useEffect(() => { (async () => { await initStore(); await refresh(); setBooting(false); })(); }, []);
 
   const startQuiz = (r) => { setRec(r); setAnswers({}); setIdx(0); setResult(null); setStep(3); };
+
   const onGenerate = async () => {
     setLoading(true);
+    let questions;
+    let usedFallback = false;
+
     try {
-      const res = await fetch("/api/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, types, count }) });
-     const raw = await res.text(); let d; try { d = JSON.parse(raw); } catch { throw new Error("Server said: " + raw.slice(0, 150)); }
+      // give up on the AI after 25s so you're never stuck waiting
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 25000);
+
+      const res = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, types, count }),
+        signal: ctrl.signal,
+      });
+      clearTimeout(timer);
+
+      const raw = await res.text();
+      let d;
+      try { d = JSON.parse(raw); } catch { throw new Error("Server said: " + raw.slice(0, 150)); }
       if (!res.ok) throw new Error(d.error || "Generation failed");
-      const questions = d.questions.map((q, i) => {
+      if (!Array.isArray(d.questions) || !d.questions.length) throw new Error("No questions returned");
+
+      questions = d.questions.map((q, i) => {
         q = { ...q, id: "q" + i };
         if (q.type === "tf") q.options = ["True", "False"];
         if (q.type === "match") q.rights = shuffle(q.pairs.map((p) => p.r));
         return q;
       });
-      const r = { id: Date.now().toString(36), title: title.trim(), createdAt: new Date().toISOString(), questions, attempts: [] };
-      await putQuiz(r);
-      setLoading(false); startQuiz(r); refresh();
     } catch (e) {
-      setLoading(false);
-      alert("AI generation failed: " + e.message);
+      // AI busy / timed out / bad response -> build the quiz offline instead
+      console.warn("AI failed, using offline generator:", e.message);
+      questions = generate(text, types, count);
+      usedFallback = true;
     }
+
+    const r = { id: Date.now().toString(36), title: title.trim(), createdAt: new Date().toISOString(), questions, attempts: [] };
+    await putQuiz(r);
+    setLoading(false);
+    startQuiz(r);
+    refresh();
+    if (usedFallback) setTimeout(() => alert("The AI is busy right now, so I made your quiz offline instead 💚 Try again later for smarter AI questions."), 100);
   };
+
   const onSubmit = async () => {
     const prev = rec.attempts[rec.attempts.length - 1] || null;
     const date = new Date().toISOString();
