@@ -131,6 +131,8 @@ const TYPES = [
 ];
 
 function generate(text, types, count) {
+  text = String(text || "");
+  types = Array.isArray(types) && types.length ? types : ["mcq"];
   let sents = text.replace(/\s+/g, " ").split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter((s) => s.split(" ").length >= 5 && kws(s).length);
   if (!sents.length) sents = [text.trim().slice(0, 200) || "Learning requires practice and review of core concepts."];
   const pool = [...new Set(sents.flatMap(kws))];
@@ -140,7 +142,7 @@ function generate(text, types, count) {
   for (let i = 0; i < count; i++) {
     const type = types[i % types.length];
     const s = sents[(i * 3 + Math.floor(i / types.length)) % sents.length];
-    const ks = kws(s), k = ks[rnd(0, ks.length - 1)];
+    const ks = kws(s).length ? kws(s) : ["concept"], k = ks[rnd(0, ks.length - 1)];
     const q = { id: "q" + i, type };
     if (type === "mcq") Object.assign(q, { prompt: `Which term best completes this statement?\n"${blank(s, k)}"`, options: shuffle([k, ...distract(k, 3)]), answer: k });
     else if (type === "tf") {
@@ -149,7 +151,7 @@ function generate(text, types, count) {
     } else if (type === "ident") Object.assign(q, { prompt: `Identify the term that fits the blank:\n"${blank(s, k)}"`, answer: k });
     else if (type === "enum") { const a = ks.slice(0, 3); Object.assign(q, { prompt: `Enumerate ${a.length} key term(s) found in this statement (separate with commas):\n"${s}"`, answer: a }); }
     else if (type === "match") {
-      const picks = shuffle(sents).slice(0, 4).map((x) => { const kk = kws(x); return { l: kk[0], r: cut(blank(x, kk[0]), 90) }; });
+      const picks = shuffle(sents).slice(0, 4).map((x) => { const kk = kws(x); const l0 = kk[0] || "Concept"; return { l: l0, r: cut(blank(x, l0), 90) }; });
       const uniq = picks.filter((p, j) => picks.findIndex((z) => z.l === p.l) === j);
       Object.assign(q, { prompt: "Match each term in Column A to its description in Column B.", pairs: uniq, rights: shuffle(uniq.map((p) => p.r)) });
     } else if (type === "fill") Object.assign(q, { prompt: `Fill in the blank:\n"${blank(s, k)}"`, answer: k });
@@ -163,6 +165,53 @@ function generate(text, types, count) {
       Object.assign(q, { prompt: truth ? s : s.replace(new RegExp("\\b" + k + "\\b", "i"), w), truth, answer: k, shown: w });
     }
     out.push(q);
+  }
+  return out;
+}
+
+/* ---------- Validate AI questions so a malformed one can never break the quiz ---------- */
+function cleanAIQuestions(list, allowed) {
+  const str = (v) => typeof v === "string" && v.trim().length > 0;
+  const out = [];
+  for (let q of Array.isArray(list) ? list : []) {
+    try {
+      if (!q || typeof q !== "object" || !allowed.includes(q.type) || !str(q.prompt || q.scenario)) continue;
+      q = { ...q, prompt: String(q.prompt || "Read the scenario and answer.") };
+      const t = q.type;
+      if (t === "mcq" || t === "scen") {
+        if (!Array.isArray(q.options)) continue;
+        q.options = q.options.map(String);
+        if (q.options.length < 2 || !str(q.answer)) continue;
+        if (!q.options.includes(String(q.answer))) {
+          const m = q.options.find((o) => norm(o) === norm(q.answer));
+          if (!m) continue; q.answer = m;
+        }
+        q.answer = String(q.answer);
+        if (t === "scen" && !str(q.scenario)) q.scenario = "Consider the following case.";
+      } else if (t === "tf") {
+        const a = norm(q.answer);
+        if (a !== "true" && a !== "false") continue;
+        q.answer = a === "true" ? "True" : "False"; q.options = ["True", "False"];
+      } else if (t === "ident" || t === "fill") {
+        if (!str(q.answer) && typeof q.answer !== "number") continue; q.answer = String(q.answer);
+      } else if (t === "enum") {
+        if (!Array.isArray(q.answer) || !q.answer.length) continue; q.answer = q.answer.map(String);
+      } else if (t === "match") {
+        if (!Array.isArray(q.pairs)) continue;
+        q.pairs = q.pairs.filter((p) => p && str(p.l) && str(p.r)).map((p) => ({ l: String(p.l), r: String(p.r) }));
+        if (q.pairs.length < 2) continue; q.rights = shuffle(q.pairs.map((p) => p.r));
+      } else if (t === "short") {
+        if (!str(q.answer)) continue; q.keys = Array.isArray(q.keys) ? q.keys.map(String) : [];
+      } else if (t === "prob") {
+        q.answer = Number(q.answer); q.s1 = Number(q.s1);
+        if (!Number.isFinite(q.answer) || !Number.isFinite(q.s1)) continue;
+      } else if (t === "mtf") {
+        q.truth = q.truth === true || q.truth === "true";
+        q.answer = String(q.answer || ""); q.shown = String(q.shown || "");
+        if (!q.truth && !q.answer) continue;
+      } else continue;
+      out.push(q);
+    } catch { /* skip bad question */ }
   }
   return out;
 }
@@ -501,48 +550,53 @@ function App() {
   const startQuiz = (r) => { setRec(r); setAnswers({}); setIdx(0); setResult(null); setStep(3); };
 
   const onGenerate = async () => {
+    if (loading) return;
     setLoading(true);
-    let questions;
+    const want = Math.max(1, Number(count) || 10);
+    const useTypes = Array.isArray(types) && types.length ? types : ["mcq"];
+    let questions = [];
     let usedFallback = false;
 
+    // 1) Try the AI, but never wait more than 28s
     try {
-      // give up on the AI after 25s so you're never stuck waiting
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 25000);
-
-      const res = await fetch("/api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, types, count }),
-        signal: ctrl.signal,
-      });
-      clearTimeout(timer);
-
-      const raw = await res.text();
-      let d;
-      try { d = JSON.parse(raw); } catch { throw new Error("Server said: " + raw.slice(0, 150)); }
-      if (!res.ok) throw new Error(d.error || "Generation failed");
-      if (!Array.isArray(d.questions) || !d.questions.length) throw new Error("No questions returned");
-
-      questions = d.questions.map((q, i) => {
-        q = { ...q, id: "q" + i };
-        if (q.type === "tf") q.options = ["True", "False"];
-        if (q.type === "match") q.rights = shuffle(q.pairs.map((p) => p.r));
-        return q;
-      });
+      const timer = setTimeout(() => ctrl.abort(), 28000);
+      try {
+        const res = await fetch("/api/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text, types: useTypes, count: want }),
+          signal: ctrl.signal,
+        });
+        const raw = await res.text();
+        let d; try { d = JSON.parse(raw); } catch { throw new Error("Server said: " + raw.slice(0, 150)); }
+        if (!res.ok) throw new Error(d.error || "Generation failed");
+        questions = cleanAIQuestions(d.questions, useTypes).slice(0, want);
+        if (!questions.length) throw new Error("No usable questions returned");
+      } finally { clearTimeout(timer); }
     } catch (e) {
-      // AI busy / timed out / bad response -> build the quiz offline instead
       console.warn("AI failed, using offline generator:", e.message);
-      questions = generate(text, types, count);
-      usedFallback = true;
+      questions = [];
     }
 
+    // 2) Top up (or fully replace) with the offline generator so you ALWAYS get your full quiz
+    if (questions.length < want) {
+      usedFallback = true;
+      try { questions = [...questions, ...generate(text, useTypes, want - questions.length)]; }
+      catch (e) { console.warn("Offline generator failed:", e); }
+    }
+    // 3) Absolute last resort
+    if (!questions.length) {
+      questions = [{ type: "tf", prompt: "Reviewing your notes regularly improves retention.", answer: "True", options: ["True", "False"] }];
+    }
+    questions = questions.map((q, i) => ({ ...q, id: "q" + i }));
+
     const r = { id: Date.now().toString(36), title: title.trim(), createdAt: new Date().toISOString(), questions, attempts: [] };
-    await putQuiz(r);
+    try { await putQuiz(r); } catch (e) { console.warn("Could not save quiz:", e); }
     setLoading(false);
     startQuiz(r);
-    refresh();
-    if (usedFallback) setTimeout(() => alert("The AI is busy right now, so I made your quiz offline instead 💚 Try again later for smarter AI questions."), 100);
+    try { refresh(); } catch {}
+    if (usedFallback) setTimeout(() => alert("The AI was busy, so part or all of your quiz was made offline 💚 Try again later for smarter AI questions."), 100);
   };
 
   const onSubmit = async () => {
