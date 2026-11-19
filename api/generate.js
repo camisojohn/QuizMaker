@@ -20,7 +20,7 @@ export default async function handler(req, res) {
     const text = String(body.text || "");
     const types = Array.isArray(body.types) && body.types.length ? body.types : ["mcq"];
     const n = Math.max(5, Math.min(50, Number(body.count) || 10));
-    const src = text.replace(/Click to edit Master title style/gi, " ").slice(0, 12000);
+    const src = text.replace(/Click to edit Master title style/gi, " ").slice(0, 8000);
 
     const spec = `Each question is a JSON object. Fields by "type":
 mcq: {type,prompt,options:[4 strings],answer:(exactly one of options)}
@@ -46,36 +46,28 @@ Return ONLY a JSON array, no markdown.\n${spec}`;
 
     const user = `Allowed types: ${types.join(", ")}. Write exactly ${n} questions, cycling through the allowed types evenly.\n\nMATERIAL:\n${src}`;
 
-    // Fast models first. Override in Vercel env vars if you like.
     const models = [
       process.env.MODEL || "gemini-2.5-flash",
       process.env.FALLBACK_MODEL || "gemini-2.5-flash-lite",
       "gemini-2.0-flash",
     ].filter((m, i, a) => a.indexOf(m) === i);
 
-    const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
-
-    const makePayload = (model) => {
-      const generationConfig = { responseMimeType: "application/json", maxOutputTokens: 8192, temperature: 0.6 };
-      // 2.5 models "think" by default, which is the #1 cause of slow responses. Turn it off.
+    const makePayload = (model, userText) => {
+      const generationConfig = { responseMimeType: "application/json", maxOutputTokens: 3000, temperature: 0.6 };
       if (/2\.5/.test(model)) generationConfig.thinkingConfig = { thinkingBudget: 0 };
       return JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
-        contents: [{ role: "user", parts: [{ text: user }] }],
+        contents: [{ role: "user", parts: [{ text: userText }] }],
         generationConfig,
       });
     };
 
-    // Pull as many complete question objects as possible, even from a truncated reply.
     const parseQuestions = (raw) => {
       raw = raw.replace(/```json|```/g, "").trim();
       const start = raw.indexOf("[");
       if (start === -1) return [];
       const end = raw.lastIndexOf("]");
-      if (end > start) {
-        try { const a = JSON.parse(raw.slice(start, end + 1)); if (Array.isArray(a)) return a; } catch {}
-      }
-      // salvage: cut at each "}" from the end until it parses
+      if (end > start) { try { const a = JSON.parse(raw.slice(start, end + 1)); if (Array.isArray(a)) return a; } catch {} }
       let cut = raw.lastIndexOf("}");
       while (cut > start) {
         try { const a = JSON.parse(raw.slice(start, cut + 1) + "]"); if (Array.isArray(a)) return a; } catch {}
@@ -84,39 +76,48 @@ Return ONLY a JSON array, no markdown.\n${spec}`;
       return [];
     };
 
-    let lastErr = "AI unavailable";
-    for (const model of models) {
-      for (let attempt = 0; attempt < 2; attempt++) {
+    // One small batch: try each model in turn until one answers
+    async function runBatch(typeList) {
+      const userText = `Write exactly ${typeList.length} questions, one per type, in this order: ${typeList.join(", ")}.\n\nMATERIAL:\n${src}`;
+      for (const model of models) {
         const remaining = left();
-        if (remaining < 2500) { lastErr = lastErr || "time budget used up"; break; }
+        if (remaining < 2500) return { qs: [], err: "time budget used up" };
         try {
           const r = await fetch(
             `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
             {
               method: "POST",
               headers: { "content-type": "application/json", "x-goog-api-key": key },
-              body: makePayload(model),
-              // never wait past our own budget
-              signal: AbortSignal.timeout(Math.min(remaining - 500, 18000)),
+              body: makePayload(model, userText),
+              signal: AbortSignal.timeout(Math.min(remaining - 500, 14000)),
             }
           );
           const d = await r.json().catch(() => ({}));
           if (r.ok) {
             const raw = (d.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("");
-            const questions = parseQuestions(raw);
-            if (questions.length) return res.status(200).json({ questions, model });
-            lastErr = "The AI returned an unexpected format.";
+            const qs = parseQuestions(raw);
+            if (qs.length) return { qs };
           } else {
-            lastErr = d.error?.message || `API error ${r.status}`;
-            // only retry on overload / rate limit / server errors; otherwise try the next model
-            if (![429, 500, 503].includes(r.status)) break;
+            var err = d.error?.message || `API error ${r.status}`;
           }
         } catch (e) {
-          lastErr = e.name === "TimeoutError" || e.name === "AbortError" ? "AI took too long" : String(e.message || e);
+          var err = e.name === "TimeoutError" || e.name === "AbortError" ? "AI took too long" : String(e.message || e);
         }
-        if (left() > 3500) await sleep(600);
       }
+      return { qs: [], err: typeof err === "string" ? err : "AI unavailable" };
     }
+
+    // Split into batches of 5 and run them all at the same time
+    const BATCH = 5;
+    const plan = Array.from({ length: n }, (_, i) => types[i % types.length]);
+    const batches = [];
+    for (let i = 0; i < n; i += BATCH) batches.push(plan.slice(i, i + BATCH));
+
+    const results = await Promise.all(batches.map(runBatch));
+    const questions = results.flatMap((r) => r.qs);
+    if (questions.length) return res.status(200).json({ questions });
+
+    const lastErr = results.find((r) => r.err)?.err || "AI unavailable";
     return res.status(502).json({ error: lastErr });
   } catch (e) {
     // absolute last resort: still return JSON, never crash
