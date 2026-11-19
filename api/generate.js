@@ -1,5 +1,4 @@
-// Save as: /api/generate.js in your Vercel project
-export const config = { maxDuration: 60 };
+
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });

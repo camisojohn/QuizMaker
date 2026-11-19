@@ -1,1 +1,4 @@
 vercel-recovery-codes*
+
+.vercel
+.env*
