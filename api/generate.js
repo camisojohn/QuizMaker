@@ -46,11 +46,14 @@ Return ONLY a JSON array, no markdown.\n${spec}`;
 
     const user = `Allowed types: ${types.join(", ")}. Write exactly ${n} questions, cycling through the allowed types evenly.\n\nMATERIAL:\n${src}`;
 
+    // Models Google currently serves (gemini-2.0-* was shut down). Tried in order.
+    // You can override the first two with MODEL / FALLBACK_MODEL in Vercel (delete them if they name a 2.0 model).
     const models = [
       process.env.MODEL || "gemini-2.5-flash",
-      process.env.FALLBACK_MODEL || "gemini-2.5-flash-lite",
-      "gemini-2.0-flash",
-    ].filter((m, i, a) => a.indexOf(m) === i);
+      process.env.FALLBACK_MODEL || "gemini-3.5-flash-lite",
+      "gemini-3.8-flash",
+      "gemini-2.5-flash-lite",
+    ].filter((m, i, a) => m && !/2\.0/.test(m) && a.indexOf(m) === i);
 
     const makePayload = (model, userText) => {
       const generationConfig = { responseMimeType: "application/json", maxOutputTokens: 3000, temperature: 0.6 };
