@@ -80,8 +80,12 @@ Return ONLY a JSON array, no markdown.\n${spec}`;
     };
 
     // One small batch: try each model in turn until one answers
-    async function runBatch(typeList) {
-      const userText = `Write exactly ${typeList.length} questions, one per type, in this order: ${typeList.join(", ")}.\n\nMATERIAL:\n${src}`;
+    async function runBatch(typeList, bi) {
+      const part = portions[bi] || src;
+      const focus = portions.length > 1 && part === src
+        ? ` Focus on portion ${bi + 1} of ${portions.length} of the material (by position in the text).`
+        : "";
+      const userText = `Write exactly ${typeList.length} questions, one per type, in this order: ${typeList.join(", ")}.${focus} Every question must test a DIFFERENT fact or concept; never repeat or rephrase a question, and never reuse the same answer.\n\nMATERIAL:\n${part}`;
       for (const model of models) {
         const remaining = left();
         if (remaining < 2500) return { qs: [], err: "time budget used up" };
@@ -112,12 +116,31 @@ Return ONLY a JSON array, no markdown.\n${spec}`;
 
     // Split into batches of 5 and run them all at the same time
     const BATCH = 5;
+    const k = Math.ceil(n / BATCH);
+    const portions = [];
+    if (k > 1 && src.length > 1200) {
+      const sentences = src.split(/(?<=[.!?])\s+|\n+/).filter(Boolean);
+      const target = Math.ceil(src.length / k);
+      let cur = "";
+      for (const sn of sentences) {
+        cur += sn + " ";
+        if (cur.length >= target && portions.length < k - 1) { portions.push(cur.trim()); cur = ""; }
+      }
+      if (cur.trim()) portions.push(cur.trim());
+    }
+    while (portions.length < k) portions.push(portions.length === 0 || src.length <= 1200 ? src : portions[portions.length % portions.length]);
     const plan = Array.from({ length: n }, (_, i) => types[i % types.length]);
     const batches = [];
     for (let i = 0; i < n; i += BATCH) batches.push(plan.slice(i, i + BATCH));
 
-    const results = await Promise.all(batches.map(runBatch));
-    const questions = results.flatMap((r) => r.qs);
+    const results = await Promise.all(batches.map((b, i) => runBatch(b, i)));
+    const seen = new Set();
+    const questions = results.flatMap((r) => r.qs).filter((q) => {
+      const k = String(q?.scenario || "") + String(q?.prompt || "") + (q?.pairs ? q.pairs.map((p) => p.l).join("") : "");
+      const key = k.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+      if (!key || seen.has(key)) return false;
+      seen.add(key); return true;
+    });
     if (questions.length) return res.status(200).json({ questions });
 
     const lastErr = results.find((r) => r.err)?.err || "AI unavailable";
