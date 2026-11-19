@@ -1,3 +1,4 @@
+// Save as: /api/generate.js in your Vercel project
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
@@ -33,11 +34,10 @@ Return ONLY a JSON array, no markdown.\n${spec}`;
 
   const user = `Allowed types: ${types.join(", ")}. Write exactly ${n} questions, cycling through the allowed types evenly.\n\nMATERIAL:\n${src}`;
 
-  // Main model first, then a fallback if it stays busy.
-  // Set MODEL / FALLBACK_MODEL in Vercel to names listed in Google AI Studio.
+  // Main model first, then a fallback if it stays busy
   const models = [
-    process.env.MODEL || "gemini-2.5-flash",
-    process.env.FALLBACK_MODEL || "gemini-2.0-flash",
+    process.env.MODEL || "gemini-3.8-flash",
+    process.env.FALLBACK_MODEL || "gemini-2.5-flash",
   ];
 
   const payload = JSON.stringify({
@@ -46,31 +46,41 @@ Return ONLY a JSON array, no markdown.\n${spec}`;
     generationConfig: { responseMimeType: "application/json", maxOutputTokens: 8192 },
   });
 
+  const t0 = Date.now();
+  const BUDGET_MS = 52000; // stay under the 60s Vercel limit
   const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
 
-  // Fewer retries + shorter waits so the app's offline fallback starts sooner
   async function callGemini() {
     let lastErr = "API error";
     for (const model of models) {
       for (let attempt = 0; attempt < 2; attempt++) {
+        const remaining = BUDGET_MS - (Date.now() - t0);
+        if (remaining < 5000) throw new Error(lastErr === "API error" ? "The AI took too long. Please try again." : lastErr);
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), Math.min(28000, remaining));
         try {
+          const body = JSON.parse(payload);
+          // Turn off "thinking" on 2.5 models so replies are much faster
+          if (model.includes("2.5")) body.generationConfig.thinkingConfig = { thinkingBudget: 0 };
           const r = await fetch(
             `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
             {
               method: "POST",
               headers: { "content-type": "application/json", "x-goog-api-key": key },
-              body: payload,
+              body: JSON.stringify(body),
+              signal: ctrl.signal,
             }
           );
           const d = await r.json();
           if (r.ok) return d;
           lastErr = d.error?.message || "API error";
-          // Retry only on overload / rate limit / server errors; otherwise move to next model
           if (![429, 500, 503].includes(r.status)) break;
         } catch (e) {
-          lastErr = String(e.message || e);
+          lastErr = e.name === "AbortError" ? "The AI was too slow, trying again…" : String(e.message || e);
+        } finally {
+          clearTimeout(timer);
         }
-        await sleep(800 * (attempt + 1));
+        await sleep(1000);
       }
     }
     throw new Error(lastErr);
